@@ -1,3 +1,5 @@
+
+# load packages
 library(shiny)
 library(shinythemes)
 library(rio)
@@ -7,8 +9,36 @@ library(colorblindr)
 library(stringr)
 library(DT)
 
+# load and tidy data
+    d <- import("./MasterKickstarter.csv", setclass = "tbl_df") %>% 
+         clean_names()
+    
+    lower48 <- d %>% 
+        select(-1:-3) %>% 
+        filter(launched_at_y == 13 & 
+               country == "USA" & 
+               county != "Non-USA" & 
+               state != "Non-USA" &
+               status != "canceled") %>% 
+        mutate(categories = as.factor(categories))
+    
+    levels(lower48$categories) <- sub("%.*", "", levels(lower48$categories))
+    # Cam: Nice use of sub! Replacing the entire string with "film" seemed a bit redundant to me, so I wrote a regex for only removing the %20&%20video, but your way is definitely clearer. :)
+    
+    lower48 <- data.frame(lapply(lower48, function(lower48) {
+        if (is.character(lower48)) {
+            return(tolower(lower48))
+        } else {
+            return(lower48)
+        }
+    }))
+    
+# Cam: The following code streamlines the state choices a bit. 
+state_choices <- as.character(1:49)
+names(state_choices) <- str_to_title(unique(lower48$state))
+
 # Define UI for application that draws a histogram
-ui <- fluidPage(theme = shinytheme("lumen"),
+ui <- fluidPage(theme = shinytheme("lumen"), # Cam: That's a great looking theme!
 
     # Application title
     titlePanel("KickStarter Data: Exploring Campaigns from 2013 by State"),
@@ -18,55 +48,7 @@ ui <- fluidPage(theme = shinytheme("lumen"),
         sidebarPanel(h4("Graph Customization Options:  "),
             selectInput("state", 
                         label = "Please select a state:",
-                        choices = c("Alabama" = "9",
-                                    "Texas" = "1",
-                                    "California" = "2", 
-                                    "Michigan" = "3",
-                                    "South Carolina" = "4",
-                                    "Ohio" = "5",
-                                    "New Mexico" = "6",
-                                    "Colorado" = "7",
-                                    "New York" = "8",
-                                    "Illinois" = "10",
-                                    "Pennsylvania" = "11",
-                                    "Georgia" = "12",
-                                    "Florida" = "13",
-                                    "Utah" = "14",
-                                    "Iowa" = "15",
-                                    "Indiana" = "16",
-                                    "Virginia" = "17",
-                                    "Connecticut" = "18",
-                                    "North Carolina" = "19",
-                                    "Wisconsin" = "20",
-                                    "Oklahoma" = "21",
-                                    "New Jersey" = "22",
-                                    "Massachusetts" = "23",
-                                    "Arizona" = "24",
-                                    "Missouri" = "25",
-                                    "Maryland" = "26",
-                                    "New Hampshire" = "27",
-                                    "Vermont" = "28",
-                                    "Rhode Island" = "29",
-                                    "Louisiana" = "30",
-                                    "Oregon" = "31",
-                                    "West Virginia" = "32",
-                                    "Washington" = "33",
-                                    "Minnesota" = "34",
-                                    "Arkansas" = "35",
-                                    "Maine" = "36",
-                                    "Montana" = "37",
-                                    "North Dakota" = "38",
-                                    "Kentucky" = "39",
-                                    "Mississippi" = "40",
-                                    "South Dakota" = "41",
-                                    "Idaho" = "42",
-                                    "Nevada" = "43",
-                                    "Wyoming" = "44",
-                                    "Tennessee" = "45",
-                                    "Kansas" = "46",
-                                    "Delaware" = "47",
-                                    "Nebraska" = "48",
-                                    "District of Columbia" = "49"), 
+                        choices = state_choices, 
                         selected = "31"),
             radioButtons("facet",
                         label = "Group to facet by:",
@@ -75,42 +57,49 @@ ui <- fluidPage(theme = shinytheme("lumen"),
                                     "Staff Pick" = "staff_pick"),
                         selected = "status"),
             submitButton("Apply changes", icon = icon("refresh"))
+            # Cam: Very cool! I didn't know how to create refresh page button! The icon is also a nice touch. 
         ),
 
         # Show a plot of the generated distribution
         mainPanel(
            plotOutput("ggdistPlot"),
-           tableOutput("table")
+           dataTableOutput("table") # Cam: Ah, looks like you needed to use dataTableOutput (not `tableOutput`)
         )
     )
 )
 
 # Define server logic required to draw a histogram
 server <- function(input, output) {
-    d <- import("./MasterKickstarter.csv", setclass = "tbl_df") %>% 
-        clean_names()
-    
-    lower48 <- d %>% 
-        select(-1:-3) %>% 
-        filter(launched_at_y == 13 & 
-                   country == "USA" & 
-                   county != "Non-USA" & 
-                   state != "Non-USA" &
-                   status != "canceled") %>% 
-        mutate(categories = as.factor(categories))
-    
-    levels(lower48$categories) <- sub("film%20&%20video", "film", levels(lower48$categories))
-    
-    lower48 <- data.frame(lapply(lower48, function(lower48) {
-        if (is.character(lower48)) return(tolower(lower48))
-        else return(lower48)
-    }))
 
     output$ggdistPlot <- renderPlot({
         
         lower48_nest <- lower48 %>%
             group_by(state) %>%
             nest() %>%
+            mutate(plot = map2(data, state, ~ggplot(.x, aes(backers_count, log(pledged))) +
+                                   geom_point(aes(color = categories)) +
+                                   geom_smooth(se = FALSE) +
+                                   facet_wrap(input$facet) +
+                                   labs(x = "Number of Backers", 
+                                        y = "Amount Pledged ($)", 
+                                        color = "Categories", 
+                                        title = "Number of campaign backers and money pledged", 
+                                        subtitle = glue::glue("Kickstarter data for the state of {.y}")) +
+                                   scale_color_OkabeIto() +
+                                   theme_minimal() +
+                                   theme(plot.title = element_text(face = "bold", hjust = 0.5), 
+                                         plot.subtitle = element_text(hjust = 0.5),
+                                         legend.position = "bottom",
+                                         legend.title = element_text(face = "bold"),
+                                         axis.title = element_text(face = "bold"))))
+        lower48_nest[[3]][as.numeric(input$state)]
+        })
+    
+    output$table <- renderDataTable({
+        
+        lower48_nest <- lower48 %>% # Cam: lower48_nest did not exist in this chunk because you created it in the previous chunk.
+            group_by(state) %>%     # This is the messy solution I came up with, but you would probably want to create the variable in
+            nest() %>%              # a less local environment. In any case, nicely done on your `nest %>% mutate %>% map2`
             mutate(plot = map2(data, state, ~ggplot(.x, aes(backers_count, log(pledged))) +
                                    geom_point(aes(color = categories)) +
                                    geom_smooth(se = FALSE) +
@@ -126,22 +115,19 @@ server <- function(input, output) {
                                          legend.position = "bottom",
                                          legend.title = element_text(face = "bold"),
                                          axis.title = element_text(face = "bold"))))
-        lower48_nest[[3]][as.numeric(input$state)]
-        })
-    
-    output$table <- renderDataTable({
+        
         check_args <- function(data, 
                                group_var, 
-                               sum_var
-        ) {
-            if(!is.data.frame(data)) {
+                               sum_var) {
+            if (!is.data.frame(data)) {
                 stop("Data supplied must be of type data frame.  Data supplied is not a data frame.")
+                # Cam: Very detailed error messages! Great work!
             }
-            if(!is.numeric(pull(data, !!enquo(sum_var)))) {
+            if (!is.numeric(pull(data, !!enquo(sum_var)))) {
                 stop("The variable to summarize must be numeric. The variable supplied is not numeric.")
             }
-            if(is.numeric(pull(data, !!enquo(group_var)))) {
-                warning("Warning: the grouping variable supplied is numeric, not categorical.")
+            if (is.numeric(pull(data, !!enquo(group_var)))) {
+                warning("The grouping variable supplied is numeric, not categorical.")
             }
         }
         
@@ -156,6 +142,7 @@ server <- function(input, output) {
                                            min = ~min(., na.rm = TRUE),
                                            max = ~max(., na.rm = TRUE))){
             
+            # Cam: Very nicely done on the bang-bang and enquos! Stuff gives me the fantods. 
             check_args(data, !!enquo(group_var), !!enquo(outcome_var))
             
             data %>%
@@ -164,14 +151,10 @@ server <- function(input, output) {
                              .funs)
         }
         
-        as.data.frame(lower48_nest[[2]][as.numeric(input$state)])%>%
+        as.data.frame(lower48_nest[[2]][as.numeric(input$state)]) %>%
             stat_calc(., input$facet, backers_count) %>%
             datatable()
-    })  #so we are really confused at this point: we want to put in a table at the bottom of the page
-    # that will give summary statistics for the state the user selects, but we are getting tons of
-    # errors that it is unable to find the object "backers_count", even when using the !!sym(), etc.
-    # notations... help, please!! 
-
+    })  
 }
 
 # Run the application 
